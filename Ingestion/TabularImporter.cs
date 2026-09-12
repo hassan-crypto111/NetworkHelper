@@ -15,8 +15,20 @@ public sealed class TabularImporter : IFileImporter
         if(rows.Count<2) return [];
         var headers=rows[0].Select((x,i)=>(Key:Normalize(x),Index:i)).ToDictionary(x=>x.Key,x=>x.Index,StringComparer.OrdinalIgnoreCase);
         string? Get(string[] row,params string[] names) { foreach(var n in names) if(headers.TryGetValue(Normalize(n),out var i)&&i<row.Length&&!string.IsNullOrWhiteSpace(row[i])) return row[i].Trim(); return null; }
-        return rows.Skip(1).Where(r=>r.Any(x=>!string.IsNullOrWhiteSpace(x))).Select(r=>new ImportRow(
+        var result=rows.Skip(1).Where(r=>r.Any(x=>!string.IsNullOrWhiteSpace(x))).Select(r=>new ImportRow(
             Get(r,"hostname","device","device name","name")??"Unnamed device",Get(r,"management ip","ip","ip address"),Get(r,"mac","mac address"),Get(r,"serial","serial number","service tag"),Get(r,"vendor","manufacturer"),Get(r,"model"),Get(r,"network","subnet","cidr"),int.TryParse(Get(r,"vlan","vlan id"),out var v)?v:null,Get(r,"site location","site"),Get(r,"type","device type"),Get(r,"device description","description"),Get(r,"zone","security zone","network zone"),Get(r,"hosted location","hosted on","hypervisor","esxi host","vm host","physical host"),Get(r,"switch","connected switch","access switch"),Get(r,"switch port","port","switch interface"),Get(r,"gateway","default gateway"))).ToList();
+
+        // RMM exports are company-wide. A placeholder Site Location makes the existing
+        // company import flow available; ImportService ignores the placeholder and
+        // resolves each row against all company sites, falling back to Unassigned Devices.
+        if(IsRmmSource(path) && result.All(x=>string.IsNullOrWhiteSpace(x.SiteLocation)))
+            result=result.Select(x=>x with{SiteLocation="Unassigned Devices"}).ToList();
+        return result;
+    }
+    private static bool IsRmmSource(string path)
+    {
+        var name=Path.GetFileNameWithoutExtension(path).ToLowerInvariant();
+        return name.Contains("rmm")||name.Contains("datto")||name.Contains("kaseya")||name.Contains("ncentral")||name.Contains("n-central")||name.Contains("n-able")||name.Contains("nable");
     }
     private static List<string[]> ReadCsv(string path) { using var p=new TextFieldParser(path){TextFieldType=FieldType.Delimited}; p.SetDelimiters(","); p.HasFieldsEnclosedInQuotes=true; var r=new List<string[]>(); while(!p.EndOfData) r.Add(p.ReadFields()??[]); return r; }
     private static List<string[]> ReadXlsx(string path) { using var w=new XLWorkbook(path); var sheet=w.Worksheets.FirstOrDefault(x=>x.Name.Equals("All Sites",StringComparison.OrdinalIgnoreCase))??w.Worksheets.First(); var range=sheet.RangeUsed(); if(range is null)return []; return range.Rows().Select(row=>row.Cells(1,range.ColumnCount()).Select(c=>c.GetFormattedString()).ToArray()).ToList(); }
