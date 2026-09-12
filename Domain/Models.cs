@@ -9,8 +9,11 @@ public record Device(long Id, long SiteId, string Name, string? IpAddress, strin
 public record NetworkRecord(long Id, long SiteId, string Name, string Cidr, int? VlanId, string? Zone);
 public record ImportRow(string Name, string? IpAddress, string? MacAddress, string? SerialNumber, string? Vendor, string? Model, string? Network, int? VlanId, string? SiteLocation = null, string? DeviceType = null, string? Description = null, string? Zone = null, string? HostedLocation = null, string? ConnectedSwitch = null, string? SwitchPort = null, string? Gateway = null)
 {
+    public string RmmStatus { get; set; } = "";
+    public string? DestinationSite { get; set; }
     public string Match { get; set; } = "New";
     public bool Import { get; set; } = true;
+    internal bool IsRmm { get; set; }
 }
 public record Conflict(long Id, long SiteId, long? DeviceId, string EntityName, string FieldName, string? ExistingValue, string? NewValue, string Status, string SourceName);
 public enum Resolution { KeepExisting, AcceptNew, Manual, SeparateDevice }
