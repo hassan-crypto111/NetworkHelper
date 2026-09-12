@@ -1,0 +1,29 @@
+using System.Net;
+using Microsoft.Data.Sqlite;
+using NetworkHelper.Data;
+using NetworkHelper.Domain;
+
+namespace NetworkHelper.Services;
+
+public sealed class RelationshipInferenceService(Database db)
+{
+    public int Infer(long siteId)
+    {
+        using var c=db.BeginConnection();var siteName=Text(c,"SELECT name FROM sites WHERE id=$s",("$s",siteId))??"Site";var source=Optional(c,"SELECT id FROM evidence_sources WHERE site_id=$s AND source_type='DERIVED' AND file_name='Deterministic relationship inference' LIMIT 1",("$s",siteId))??Scalar(c,"INSERT INTO evidence_sources(site_id,file_name,source_type,imported_at,content_hash) VALUES($s,'Deterministic relationship inference','DERIVED',$at,$h); SELECT last_insert_rowid();",("$s",siteId),("$at",DateTimeOffset.Now.ToString("O")),("$h",$"relationship-inference-{siteId}"));var added=0;var networks=db.Networks(siteId);var vlans=db.Entities(siteId).Where(x=>x.Type=="vlan").ToList();
+        foreach(var device in db.Devices(siteId))
+        {
+            var evidence=Evidence(c,device.Id);added+=Upsert(c,siteId,new("device",device.Id,device.Name),new("site",siteId,siteName),"BELONGS_TO_SITE",source,evidence,1,"Device is assigned to this site");
+            if(string.IsNullOrWhiteSpace(device.IpAddress)||!IPAddress.TryParse(device.IpAddress,out var ip))continue;
+            added+=Upsert(c,siteId,new("device",device.Id,device.Name),new("ip",null,device.IpAddress),"HAS_IP",source,evidence,.95,$"Device inventory IP: {device.IpAddress}");
+            var matches=networks.Where(n=>Contains(n.Cidr,ip)).ToList();if(matches.Count!=1)continue;var network=matches[0];
+            added+=Upsert(c,siteId,new("device",device.Id,device.Name),new("subnet",network.Id,network.Cidr),"BELONGS_TO_SUBNET",source,evidence,.86,$"{device.IpAddress} is within {network.Cidr}");
+            if(!network.VlanId.HasValue)continue;var vlan=vlans.FirstOrDefault(x=>x.Name.StartsWith($"VLAN {network.VlanId} ",StringComparison.OrdinalIgnoreCase));if(vlan is not null)added+=Upsert(c,siteId,new("device",device.Id,device.Name),vlan,"BELONGS_TO_VLAN",source,evidence,.82,$"Subnet {network.Cidr} maps to VLAN {network.VlanId}");
+        }
+        return added;
+    }
+    private static bool Contains(string cidr,IPAddress ip){var parts=cidr.Split('/');if(parts.Length!=2||!IPAddress.TryParse(parts[0],out var network)||!int.TryParse(parts[1],out var prefix)||prefix is<0 or>32)return false;var a=network.GetAddressBytes();var b=ip.GetAddressBytes();if(a.Length!=4||b.Length!=4)return false;var mask=prefix==0?0u:uint.MaxValue<<(32-prefix);uint A=((uint)a[0]<<24)|((uint)a[1]<<16)|((uint)a[2]<<8)|a[3],B=((uint)b[0]<<24)|((uint)b[1]<<16)|((uint)b[2]<<8)|b[3];return(A&mask)==(B&mask);}
+    public static bool ContainsAddress(string cidr,string address)=>IPAddress.TryParse(address,out var ip)&&Contains(cidr,ip);
+    private static List<long> Evidence(SqliteConnection c,long deviceId){using var q=Cmd(c,"SELECT DISTINCT fe.source_id FROM facts f JOIN fact_evidence fe ON fe.fact_id=f.id WHERE f.entity_type='device' AND f.entity_id=$d",("$d",deviceId));using var r=q.ExecuteReader();var ids=new List<long>();while(r.Read())ids.Add(r.GetInt64(0));return ids;}
+    private static int Upsert(SqliteConnection c,long site,EntityRef from,EntityRef to,string type,long source,IEnumerable<long> evidence,double confidence,string basis){using var find=Cmd(c,"SELECT id FROM entity_relationships WHERE site_id=$s AND from_entity_type=$ft AND COALESCE(from_entity_id,-1)=COALESCE($fi,-1) AND from_entity_name=$fn AND to_entity_type=$tt AND COALESCE(to_entity_id,-1)=COALESCE($ti,-1) AND to_entity_name=$tn AND relationship_type=$rt AND status<>'superseded' LIMIT 1",("$s",site),("$ft",from.Type),("$fi",from.Id),("$fn",from.Name),("$tt",to.Type),("$ti",to.Id),("$tn",to.Name),("$rt",type));var existing=find.ExecuteScalar();long id;if(existing is long value){id=value;Exec(c,"UPDATE entity_relationships SET confidence=MAX(confidence,$c),last_verified_at=$at WHERE id=$id",("$c",confidence),("$at",DateTimeOffset.Now.ToString("O")),("$id",id));}else{id=Scalar(c,"INSERT INTO entity_relationships(site_id,from_entity_type,from_entity_id,from_entity_name,to_entity_type,to_entity_id,to_entity_name,relationship_type,source_id,confidence,status,basis,created_at,last_verified_at) VALUES($s,$ft,$fi,$fn,$tt,$ti,$tn,$rt,$src,$c,'inferred',$b,$at,$at); SELECT last_insert_rowid();",("$s",site),("$ft",from.Type),("$fi",from.Id),("$fn",from.Name),("$tt",to.Type),("$ti",to.Id),("$tn",to.Name),("$rt",type),("$src",source),("$c",confidence),("$b",basis),("$at",DateTimeOffset.Now.ToString("O")));}Exec(c,"INSERT OR IGNORE INTO relationship_evidence(relationship_id,source_id,basis) VALUES($r,$s,$b)",("$r",id),("$s",source),("$b",basis));foreach(var evidenceSource in evidence)Exec(c,"INSERT OR IGNORE INTO relationship_evidence(relationship_id,source_id,basis) VALUES($r,$s,$b)",("$r",id),("$s",evidenceSource),("$b",basis));return existing is null?1:0;}
+    private static string? Text(SqliteConnection c,string sql,params(string,object?)[] p){using var x=Cmd(c,sql,p);return x.ExecuteScalar() as string;}private static long Scalar(SqliteConnection c,string sql,params(string,object?)[] p){using var x=Cmd(c,sql,p);return(long)x.ExecuteScalar()!;}private static long? Optional(SqliteConnection c,string sql,params(string,object?)[] p){using var x=Cmd(c,sql,p);var value=x.ExecuteScalar();return value is null or DBNull?null:Convert.ToInt64(value);}private static void Exec(SqliteConnection c,string sql,params(string,object?)[] p){using var x=Cmd(c,sql,p);x.ExecuteNonQuery();}private static SqliteCommand Cmd(SqliteConnection c,string sql,params(string,object?)[] p){var x=c.CreateCommand();x.CommandText=sql;foreach(var v in p)x.Parameters.AddWithValue(v.Item1,v.Item2??DBNull.Value);return x;}
+}
