@@ -2,7 +2,10 @@ namespace NetworkHelper.Domain;
 
 public record Company(long Id, string Name);
 public record Site(long Id, long CompanyId, string Name, string? Address);
-public record Device(long Id, long SiteId, string Name, string? IpAddress, string? MacAddress, string? SerialNumber, string? Vendor, string? Model, string? DeviceType, string? Zone, string? Description);
+public record Device(long Id, long SiteId, string Name, string? IpAddress, string? MacAddress, string? SerialNumber, string? Vendor, string? Model, string? DeviceType, string? Zone, string? Description, bool RmmVerified = false)
+{
+    public string RmmStatus => RmmVerified ? "✓" : "";
+}
 public record NetworkRecord(long Id, long SiteId, string Name, string Cidr, int? VlanId, string? Zone);
 public record ImportRow(string Name, string? IpAddress, string? MacAddress, string? SerialNumber, string? Vendor, string? Model, string? Network, int? VlanId, string? SiteLocation = null, string? DeviceType = null, string? Description = null, string? Zone = null, string? HostedLocation = null, string? ConnectedSwitch = null, string? SwitchPort = null, string? Gateway = null)
 {
