@@ -15,15 +15,30 @@ public sealed class TabularImporter : IFileImporter
         if(rows.Count<2) return [];
         var headers=rows[0].Select((x,i)=>(Key:Normalize(x),Index:i)).ToDictionary(x=>x.Key,x=>x.Index,StringComparer.OrdinalIgnoreCase);
         string? Get(string[] row,params string[] names) { foreach(var n in names) if(headers.TryGetValue(Normalize(n),out var i)&&i<row.Length&&!string.IsNullOrWhiteSpace(row[i])) return row[i].Trim(); return null; }
+        var isRmm=IsRmmSource(path)||LooksLikeRmm(headers.Keys);
         var result=rows.Skip(1).Where(r=>r.Any(x=>!string.IsNullOrWhiteSpace(x))).Select(r=>new ImportRow(
-            Get(r,"hostname","device","device name","name")??"Unnamed device",Get(r,"management ip","ip","ip address"),Get(r,"mac","mac address"),Get(r,"serial","serial number","service tag"),Get(r,"vendor","manufacturer"),Get(r,"model"),Get(r,"network","subnet","cidr"),int.TryParse(Get(r,"vlan","vlan id"),out var v)?v:null,Get(r,"site location","site"),Get(r,"type","device type"),Get(r,"device description","description"),Get(r,"zone","security zone","network zone"),Get(r,"hosted location","hosted on","hypervisor","esxi host","vm host","physical host"),Get(r,"switch","connected switch","access switch"),Get(r,"switch port","port","switch interface"),Get(r,"gateway","default gateway"))).ToList();
-
-        // RMM exports are company-wide. A placeholder Site Location makes the existing
-        // company import flow available; ImportService ignores the placeholder and
-        // resolves each row against all company sites, falling back to Unassigned Devices.
-        if(IsRmmSource(path) && result.All(x=>string.IsNullOrWhiteSpace(x.SiteLocation)))
-            result=result.Select(x=>x with{SiteLocation="Unassigned Devices"}).ToList();
+            Get(r,"hostname","device","device name","name")??"Unnamed device",
+            Get(r,"management ip","ip","ip address","internal ip","internal ip address"),
+            Get(r,"mac","mac address"),
+            Get(r,"serial","serial number","service tag"),
+            Get(r,"vendor","manufacturer"),
+            Get(r,"model"),
+            Get(r,"network","subnet","cidr"),
+            int.TryParse(Get(r,"vlan","vlan id"),out var v)?v:null,
+            isRmm?"Unassigned Devices":Get(r,"site location","site"),
+            Get(r,"type","device type"),
+            Get(r,"device description","description"),
+            Get(r,"zone","security zone","network zone"),
+            Get(r,"hosted location","hosted on","hypervisor","esxi host","vm host","physical host"),
+            Get(r,"switch","connected switch","access switch"),
+            Get(r,"switch port","port","switch interface"),
+            Get(r,"gateway","default gateway"))).ToList();
         return result;
+    }
+    private static bool LooksLikeRmm(IEnumerable<string> normalizedHeaders)
+    {
+        var set=normalizedHeaders.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return set.Contains("hostname")&&set.Contains("internalip")&&(set.Contains("status")||set.Contains("lastreboot")||set.Contains("patchstatus"));
     }
     private static bool IsRmmSource(string path)
     {
