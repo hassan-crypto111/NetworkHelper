@@ -25,7 +25,7 @@ public sealed class TabularImporter : IFileImporter
             Get(r,"model"),
             Get(r,"network","subnet","cidr"),
             int.TryParse(Get(r,"vlan","vlan id"),out var v)?v:null,
-            isRmm?"Unassigned Devices":Get(r,"site location","site"),
+            isRmm?null:Get(r,"site location","site"),
             Get(r,"type","device type"),
             Get(r,"device description","description"),
             Get(r,"zone","security zone","network zone"),
@@ -33,6 +33,7 @@ public sealed class TabularImporter : IFileImporter
             Get(r,"switch","connected switch","access switch"),
             Get(r,"switch port","port","switch interface"),
             Get(r,"gateway","default gateway"))).ToList();
+        foreach(var row in result)row.IsRmm=isRmm;
         return result;
     }
     private static bool LooksLikeRmm(IEnumerable<string> normalizedHeaders)
